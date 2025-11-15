@@ -58,6 +58,7 @@ bool greenLedState = false;
 unsigned long dualButtonStartTime = 0;
 bool dualButtonActive = false;
 
+
 // --- HELPER FUNCTIONS ---
 
 float readUltrasonicFiltered() {
@@ -159,6 +160,28 @@ void signalRedLed(unsigned long durationMs = 1000, const __FlashStringHelper* re
   digitalWrite(LED_RED_PIN, LOW);
 }
 
+// --- NEW HELPER FUNCTION for Motor Stop & State Save ---
+void stopAndSaveState(bool saveToEEPROM) {
+  if (motorState == STOPPED) return;
+  
+  setMotorState(STOPPED);
+  digitalWrite(LED_GREEN_PIN, LOW); // Ensure LED is off immediately
+
+  if (saveToEEPROM) {
+    // Quick blink to confirm stop/save
+    digitalWrite(LED_GREEN_PIN, HIGH);
+    delay(100);
+    digitalWrite(LED_GREEN_PIN, LOW);
+    
+    currentDistance = readUltrasonicFiltered();
+    saveDistanceToEEPROM(currentDistance);
+    previousDistance = currentDistance;
+    Serial.println(F("[Motor] Movement stopped. Distance saved."));
+  } else {
+    Serial.println(F("[Motor] Movement stopped (Safety/Limit)."));
+  }
+}
+
 // --- SETUP ---
 
 void setup() {
@@ -175,7 +198,7 @@ void setup() {
   pinMode(LED_RED_PIN, OUTPUT);
 
   Serial.begin(9600);
-  Serial.println(F("\n=== Adjustable Table Controller Initialized ==="));
+  Serial.println(F("\n=== Adjustable Table Controller Initialized (Toggle Mode) ==="));
   Serial.println(F("[System] Power-on safety delay (2s)..."));
 
   digitalWrite(LED_GREEN_PIN, HIGH);
@@ -203,7 +226,6 @@ void setup() {
 void loop() {
   bool upPressed = !digitalRead(BTN_UP_PIN);
   bool downPressed = !digitalRead(BTN_DOWN_PIN);
-
   unsigned long now = millis();
 
   // --- Dual button EEPROM reset ---
@@ -212,8 +234,10 @@ void loop() {
       dualButtonActive = true;
       dualButtonStartTime = now;
       Serial.println(F("[Reset] Both buttons pressed, waiting 3 seconds..."));
+      stopAndSaveState(false); // Stop motor immediately on dual press
     } else if (now - dualButtonStartTime >= RESET_HOLD_TIME) {
-      setMotorState(STOPPED);
+      stopAndSaveState(false);
+      
       currentDistance = readUltrasonicFiltered();
       saveDistanceToEEPROM(currentDistance);
       previousDistance = currentDistance;
@@ -234,75 +258,67 @@ void loop() {
     dualButtonActive = false;
   }
 
-  // --- Motor stop when buttons released ---
-  if (motorState != STOPPED && !upPressed && !downPressed) {
-    setMotorState(STOPPED);
-    digitalWrite(LED_GREEN_PIN, HIGH);
-    delay(200);
-    currentDistance = readUltrasonicFiltered();
-    saveDistanceToEEPROM(currentDistance);
-    digitalWrite(LED_GREEN_PIN, LOW);
-    previousDistance = currentDistance;
-    Serial.println(F("[Motor] Movement stopped. Distance saved."));
-    return;
+  // --- Button Press Handling (Toggle/Stop Logic) ---
+  // A single button press is either a start or a stop command.
+  if ((upPressed || downPressed) && (now - lastButtonTime > DEBOUNCE_DELAY)) {
+    lastButtonTime = now; // Update debounce timer for the next press
+
+    // 1. If motor is currently MOVING, any button press is a STOP command
+    if (motorState != STOPPED) {
+        stopAndSaveState(true);
+        return; 
+    }
+
+    // 2. If motor is STOPPED, check which button was pressed to START
+    if (upPressed && !downPressed) {
+      // UP START attempt
+      currentDistance = readUltrasonicFiltered();
+      if (fabs(currentDistance - previousDistance) > DISTANCE_TOLERANCE_CM) {
+        signalRedLed(1000, F("Untrusted ultrasonic reading (UP start). Safety lock."));
+        return;
+      }
+      if (currentDistance >= MAX_DISTANCE_CM) {
+        signalRedLed(1000, F("MAX limit reached. Cannot start move UP."));
+        return;
+      }
+      setMotorState(MOVING_UP);
+    } 
+    else if (downPressed && !upPressed) {
+      // DOWN START attempt
+      currentDistance = readUltrasonicFiltered();
+      if (fabs(currentDistance - previousDistance) > DISTANCE_TOLERANCE_CM) {
+        signalRedLed(1000, F("Untrusted ultrasonic reading (DOWN start). Safety lock."));
+        return;
+      }
+      if (currentDistance <= MIN_DISTANCE_CM) {
+        signalRedLed(1000, F("MIN limit reached. Cannot start move DOWN."));
+        return;
+      }
+      setMotorState(MOVING_DOWN);
+    }
   }
 
-  // --- UP movement ---
-  if (upPressed) {
+  // --- Continuous Movement Monitoring (The Non-Blocking Motion Loop) ---
+  if (motorState != STOPPED) {
+    blinkGreenLed();
+    
+    // Read and check distance frequently
     currentDistance = readUltrasonicFiltered();
-    if (fabs(currentDistance - previousDistance) > DISTANCE_TOLERANCE_CM) {
-      signalRedLed(1000, F("Untrusted ultrasonic reading (UP)."));
+
+    // Check for limits hit during motion
+    if (motorState == MOVING_UP && currentDistance >= MAX_DISTANCE_CM) {
+      signalRedLed(1000, F("MAX limit reached during UP motion. AUTO-STOP."));
+      stopAndSaveState(true); 
       return;
     }
-    if (currentDistance >= MAX_DISTANCE_CM) {
-      signalRedLed(1000, F("MAX limit reached. Cannot move UP."));
+    
+    if (motorState == MOVING_DOWN && currentDistance <= MIN_DISTANCE_CM) {
+      signalRedLed(1000, F("MIN limit reached during DOWN motion. AUTO-STOP."));
+      stopAndSaveState(true); 
       return;
     }
-    setMotorState(MOVING_UP);
-    while (!digitalRead(BTN_UP_PIN)) {
-      blinkGreenLed();
-      currentDistance = readUltrasonicFiltered();
-      if (currentDistance >= MAX_DISTANCE_CM) {
-        setMotorState(STOPPED);
-        signalRedLed(1000, F("MAX limit reached during UP motion."));
-        break;
-      }
-    }
-    setMotorState(STOPPED);
-    digitalWrite(LED_GREEN_PIN, HIGH);
-    currentDistance = readUltrasonicFiltered();
-    saveDistanceToEEPROM(currentDistance);
-    previousDistance = currentDistance;
+  } else {
+    // If stopped, ensure green LED is permanently off
     digitalWrite(LED_GREEN_PIN, LOW);
-    Serial.println(F("[UP] Movement complete."));
-  } 
-  // --- DOWN movement ---
-  else if (downPressed) {
-    currentDistance = readUltrasonicFiltered();
-    if (fabs(currentDistance - previousDistance) > DISTANCE_TOLERANCE_CM) {
-      signalRedLed(1000, F("Untrusted ultrasonic reading (DOWN)."));
-      return;
-    }
-    if (currentDistance <= MIN_DISTANCE_CM) {
-      signalRedLed(1000, F("MIN limit reached. Cannot move DOWN."));
-      return;
-    }
-    setMotorState(MOVING_DOWN);
-    while (!digitalRead(BTN_DOWN_PIN)) {
-      blinkGreenLed();
-      currentDistance = readUltrasonicFiltered();
-      if (currentDistance <= MIN_DISTANCE_CM) {
-        setMotorState(STOPPED);
-        signalRedLed(1000, F("MIN limit reached during DOWN motion."));
-        break;
-      }
-    }
-    setMotorState(STOPPED);
-    digitalWrite(LED_GREEN_PIN, HIGH);
-    currentDistance = readUltrasonicFiltered();
-    saveDistanceToEEPROM(currentDistance);
-    previousDistance = currentDistance;
-    digitalWrite(LED_GREEN_PIN, LOW);
-    Serial.println(F("[DOWN] Movement complete."));
   }
 }
