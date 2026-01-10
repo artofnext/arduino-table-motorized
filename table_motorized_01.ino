@@ -14,21 +14,21 @@ const int MOTOR_DIR_B_PIN = 6;
 // Control Buttons (Active LOW with internal PULLUP)
 const int BTN_UP_PIN = 11;
 const int BTN_DOWN_PIN = 12;
+const int BTN_MEMORY_PIN = 10;
+
 
 // Status LEDs
-const int LED_GREEN_PIN = 8; // Blinks when motor is moving
 const int LED_RED_PIN = 9;   // Turns on when security error occurs
+const int LED_GREEN_PIN = 8; // Blinks when motor is moving
+const int LED_YELLOW_PIN = 7;  // Memory indicator
 
 // --- EEPROM AND CONTROL PARAMETERS ---
 const int EEPROM_DISTANCE_ADDR = 0;
 const float DISTANCE_TOLERANCE_CM = 2.0; 
 
 // Distance Limits (in centimeters)
-const float MIN_DISTANCE_CM = 50.0;
-const float MAX_DISTANCE_CM = 150.0;
-
-// Motor Speed (0-255)
-const int MOTOR_SPEED = 220;
+const float MIN_DISTANCE_CM = 67.0;
+const float MAX_DISTANCE_CM = 111.0;
 
 // Button Debounce time (in milliseconds)
 const long DEBOUNCE_DELAY = 50;
@@ -120,21 +120,20 @@ void setMotorState(MotorState state) {
 
   switch (state) {
     case MOVING_UP:
+      delay(1000); // waiting a bit
       digitalWrite(MOTOR_DIR_A_PIN, HIGH);
       digitalWrite(MOTOR_DIR_B_PIN, LOW);
-      analogWrite(MOTOR_PWM_PIN, MOTOR_SPEED);
       Serial.println(F("[MOTOR] Moving UP"));
       break;
     case MOVING_DOWN:
+      delay(1000); // waiting a bit
       digitalWrite(MOTOR_DIR_A_PIN, LOW);
       digitalWrite(MOTOR_DIR_B_PIN, HIGH);
-      analogWrite(MOTOR_PWM_PIN, MOTOR_SPEED);
       Serial.println(F("[MOTOR] Moving DOWN"));
       break;
     default:
       digitalWrite(MOTOR_DIR_A_PIN, LOW);
       digitalWrite(MOTOR_DIR_B_PIN, LOW);
-      analogWrite(MOTOR_PWM_PIN, 0);
       Serial.println(F("[MOTOR] STOPPED"));
       break;
   }
@@ -187,15 +186,17 @@ void stopAndSaveState(bool saveToEEPROM) {
 void setup() {
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
-  pinMode(MOTOR_PWM_PIN, OUTPUT);
+  // pinMode(MOTOR_PWM_PIN, OUTPUT);
   pinMode(MOTOR_DIR_A_PIN, OUTPUT);
   pinMode(MOTOR_DIR_B_PIN, OUTPUT);
   
   pinMode(BTN_UP_PIN, INPUT_PULLUP);
-  pinMode(BTN_DOWN_PIN, INPUT_PULLUP);
+  pinMode(BTN_DOWN_PIN, INPUT_PULLUP);  
+  pinMode(BTN_MEMORY_PIN, INPUT_PULLUP);
   
   pinMode(LED_GREEN_PIN, OUTPUT);
   pinMode(LED_RED_PIN, OUTPUT);
+  pinMode(LED_YELLOW_PIN, OUTPUT);
 
   Serial.begin(9600);
   Serial.println(F("\n=== Adjustable Table Controller Initialized (Toggle Mode) ==="));
@@ -203,9 +204,11 @@ void setup() {
 
   digitalWrite(LED_GREEN_PIN, HIGH);
   digitalWrite(LED_RED_PIN, HIGH);
+  digitalWrite(LED_YELLOW_PIN, HIGH);
   delay(2000);
   digitalWrite(LED_GREEN_PIN, LOW);
   digitalWrite(LED_RED_PIN, LOW);
+  digitalWrite(LED_YELLOW_PIN, LOW);
 
   currentDistance = readUltrasonicFiltered();
   float stored = loadDistanceFromEEPROM();
