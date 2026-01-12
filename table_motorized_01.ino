@@ -177,7 +177,7 @@ void stopAndSaveState(bool saveToEEPROM) {
     previousDistance = currentDistance;
     Serial.println(F("[Motor] Movement stopped. Distance saved."));
   } else {
-    Serial.println(F("[Motor] Movement stopped (Safety/Limit)."));
+    Serial.println(F("[Motor] Movement stopped."));
   }
 }
 
@@ -209,6 +209,12 @@ void setup() {
   digitalWrite(LED_GREEN_PIN, LOW);
   digitalWrite(LED_RED_PIN, LOW);
   digitalWrite(LED_YELLOW_PIN, LOW);
+  // for (int i = 0; i < 20; i++) {
+  //   digitalWrite(LED_GREEN_PIN, HIGH);
+  //   delay(400);
+  //   digitalWrite(LED_GREEN_PIN, LOW);
+  //   delay(400);
+  // }
 
   currentDistance = readUltrasonicFiltered();
   float stored = loadDistanceFromEEPROM();
