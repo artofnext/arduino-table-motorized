@@ -3,38 +3,43 @@
 #include <U8g2lib.h>
 #include <Wire.h>
 
-// --- PIN DEFINITIONS ---
-// HC-SR04
+// ----------------- PIN DEFINITIONS -----------------
 const int TRIG_PIN = 3;
 const int ECHO_PIN = 2;
 
-// L298N
 const int MOTOR_DIR_A_PIN = 4;
 const int MOTOR_DIR_B_PIN = 6;
-const int MOTOR_PWM_PIN = 5;  // future PWM use
 
-// Buttons (PCINT interrupts)
 const int BTN_UP_PIN = 11;
 const int BTN_DOWN_PIN = 12;
 const int BTN_MEMORY_PIN = 10;
 
-// LEDs
 const int LED_RED_PIN = 9;
 const int LED_GREEN_PIN = 8;
-// Yellow LED reserved
+const int LED_YELLOW_PIN = 7;
 
-// OLED (Hardware I2C on A4/A5)
+// -------------- OLED (Hardware I2C A4/A5) -----------
 U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C u8g2(U8G2_R0);
 
-// --- CONTROL PARAMETERS ---
+// ---------------- CONTROL PARAMETERS ----------------
 const int EEPROM_DISTANCE_ADDR = 0;
+
+// EEPROM memory slots
+const int EEPROM_M1_ADDR = 10;
+const int EEPROM_M2_ADDR = 20;
+const int EEPROM_M3_ADDR = 30;
+
 const float MIN_DISTANCE_CM = 67.0;
 const float MAX_DISTANCE_CM = 111.0;
+
 const unsigned long DISPLAY_REFRESH_INTERVAL = 300;
 const unsigned long LED_BLINK_INTERVAL = 200;
 const unsigned long RESET_HOLD_TIME = 3000;
+const unsigned long MEMORY_LONG_PRESS = 2000;
 
-// --- STATE ---
+const float MEMORY_TOLERANCE_CM = 1.0; // ±1.0 cm configurable
+
+// -------------------- STATE -------------------------
 enum MotorState { STOPPED, MOVING_UP, MOVING_DOWN };
 MotorState motorState = STOPPED;
 
@@ -50,44 +55,42 @@ bool greenLedState = false;
 bool dualButtonActive = false;
 unsigned long dualButtonStartTime = 0;
 
-// --- INTERRUPT FLAGS ---
+// Interrupt flags
 volatile bool upPressedISR = false;
 volatile bool downPressedISR = false;
 
-// --- NON-BLOCKING MOTOR START ---
+// Memory system
+float memSlots[3] = {NAN, NAN, NAN};
+int selectedSlot = -1; // -1 = OFF
+
+unsigned long memButtonDownTime = 0;
+bool memButtonWasHeld = false;
+
+// Motor start delay
 bool pendingMotorStart = false;
 MotorState requestedMotorState = STOPPED;
 unsigned long motorStartRequestTime = 0;
 
-// ============================================================================
-// INTERRUPT SETUP
-// ============================================================================
+// ======================== INTERRUPTS =========================
 void setupPCINT() {
-  // Enable PCINT0 group (pins D8–D13)
   PCICR |= (1 << PCIE0);
-
-  // Enable interrupts for pins 10, 11, 12
-  PCMSK0 |= (1 << PCINT2);  // pin 10
-  PCMSK0 |= (1 << PCINT3);  // pin 11
-  PCMSK0 |= (1 << PCINT4);  // pin 12
+  PCMSK0 |= (1 << PCINT2); // pin 10
+  PCMSK0 |= (1 << PCINT3); // pin 11
+  PCMSK0 |= (1 << PCINT4); // pin 12
 }
 
 ISR(PCINT0_vect) {
   static unsigned long lastInterrupt = 0;
   unsigned long now = millis();
-  if (now - lastInterrupt < 30) return; // debounce
+  if (now - lastInterrupt < 30) return;
 
-  if (!digitalRead(BTN_UP_PIN))   upPressedISR = true;
+  if (!digitalRead(BTN_UP_PIN)) upPressedISR = true;
   if (!digitalRead(BTN_DOWN_PIN)) downPressedISR = true;
 
   lastInterrupt = now;
 }
 
-// ============================================================================
-// ULTRASONIC SENSOR
-// ============================================================================
-
-// Fast read (used while motor is moving)
+// ======================== ULTRASONIC =========================
 float readUltrasonicFast() {
   digitalWrite(TRIG_PIN, LOW);
   delayMicroseconds(2);
@@ -96,42 +99,21 @@ float readUltrasonicFast() {
   digitalWrite(TRIG_PIN, LOW);
 
   long duration = pulseIn(ECHO_PIN, HIGH, 25000UL);
-  if (duration <= 0) return currentDistance;
+  if (duration <= 0) return NAN;
 
   return duration * 0.0343 / 2.0;
 }
 
-// Median filtered (used when stopped)
 float readUltrasonicMedian() {
-  const int samples = 5;
-  float arr[samples];
-
-  for (int i = 0; i < samples; i++) {
-    arr[i] = readUltrasonicFast();
-    delay(8);
-  }
-
-  // Insertion sort
-  for (int i = 1; i < samples; i++) {
-    float key = arr[i];
-    int j = i - 1;
-    while (j >= 0 && arr[j] > key) {
-      arr[j + 1] = arr[j];
-      j--;
-    }
-    arr[j + 1] = key;
-  }
-
-  return arr[samples/2];
+  float arr[5];
+  for (int i = 0; i < 5; i++) {
+   FloatFromEEPROM(EEPROM_M2_ADDR);
+  memSlots[2] = loadFloatFromEEPROM(EEPROM_M3_ADDR);
 }
 
-// ============================================================================
-// EEPROM
-// ============================================================================
-void saveDistanceToEEPROM(float distance) {
-  if (abs(distance - previousDistance) < 0.5) return;
- ) {
-  requestedMotorState = state;
+// ======================== MOTOR CONTROL =========================
+void beginMotorMove(MotorState s) {
+  requestedMotorState = s;
   motorStartRequestTime = millis();
   pendingMotorStart = true;
 }
@@ -152,22 +134,22 @@ void applyMotorStartIfReady() {
   pendingMotorStart = false;
 }
 
-void stopAndSaveState(bool save) {
-  if (motorState == STOPPED) return;
-
+void stopMotor() {
   motorState = STOPPED;
   digitalWrite(MOTOR_DIR_A_PIN, LOW);
   digitalWrite(MOTOR_DIR_B_PIN, LOW);
-
-  if (save) {
-    currentDistance = readUltrasonicMedian();
-    saveDistanceToEEPROM(currentDistance);
-  }
 }
 
-// ============================================================================
-// DISPLAY
-// ============================================================================
+// ======================== DISPLAY =========================
+void showError(const char* message) {
+  u8g2.firstPage();
+  do {
+    u8g2.setFont(u8g2_font_6x13_tr);
+    u8g2.drawStr(0, 16, message);
+  } while (u8g2.nextPage());
+  delay(1500);
+}
+
 void updateDisplay(float dist, MotorState state) {
   if (abs(dist - previousDisplayedDistance) < 0.1 &&
       state == lastDisplayedState) return;
@@ -183,25 +165,35 @@ void updateDisplay(float dist, MotorState state) {
     u8g2.setFont(u8g2_font_6x13_tr);
 
     u8g2.setCursor(0, 12);
-    u8g2.print(F("Table height:"));
+    u8g2.print(F("Height: "));
 
+    if (isnan(dist))
+      u8g2.print(F("ERR"));
+    else {
+      u8g2.print(dist, 1);
+      u8g2.print(F(" cm"));
+    }
+
+    // Slot indicator
+    u8g2.setCursor(80, 12);
+    if (selectedSlot == -1) u8g2.print(F("[--]"));
+    else u8g2.print(selectedSlot == 0 ? "[M1]" :
+                    selectedSlot == 1 ? "[M2]" :
+                                        "[M3]");
+
+    // Movement
     u8g2.setCursor(0, 28);
-    u8g2.print(dist, 1);
-    u8g2.print(F(" cm"));
-
-    u8g2.setCursor(95, 28);
     if (state == MOVING_UP) u8g2.print(F("UP"));
     else if (state == MOVING_DOWN) u8g2.print(F("DN"));
-    else u8g2.print(F("STP"));
+    else u8g2.print(F("STOP"));
 
+    // Heartbeat pixel
     if (heartbeat) u8g2.drawPixel(127, 0);
 
   } while (u8g2.nextPage());
 }
 
-// ============================================================================
-// SETUP
-// ============================================================================
+// ======================== SETUP =========================
 void setup() {
   pinMode(TRIG_PIN, OUTPUT);
   pinMode(ECHO_PIN, INPUT);
@@ -215,71 +207,108 @@ void setup() {
 
   pinMode(LED_RED_PIN, OUTPUT);
   pinMode(LED_GREEN_PIN, OUTPUT);
+  pinMode(LED_YELLOW_PIN, OUTPUT);
 
   Serial.begin(115200);
   setupPCINT();
-
   u8g2.begin();
-  u8g2.setContrast(255);
 
-  currentDistance = readUltrasonicMedian();
+  loadMemorySlots();
 
-  float stored = loadDistanceFromEEPROM();
-  if (isnan(stored)) {
-    saveDistanceToEEPROM(currentDistance);
-  } else {
-    previousDistance = stored;
-  }
-
-  Serial.println(F("[System] Ready."));
+  Serial.println("[System] Ready");
 }
 
-// ============================================================================
-// LOOP
-// ============================================================================
+// ======================== LOOP =========================
 void loop() {
   unsigned long now = millis();
 
-  // Update distance
-  if (motorState == STOPPED)
-    currentDistance = readUltrasonicMedian();
-  else
-    currentDistance = readUltrasonicFast();
+  // Distance reading
+  float distRaw = (motorState == STOPPED)
+                    ? readUltrasonicMedian()
+                    : readUltrasonicFast();
 
-  // Display
+  if (isnan(distRaw)) {
+    showError("Sensor Error");
+    return;
+  }
+
+  currentDistance = distRaw;
+
+  // Auto-STOP for limits
+  if (currentDistance >= MAX_DISTANCE_CM && motorState == MOVING_UP)
+    stopMotor();
+
+  if (currentDistance <= MIN_DISTANCE_CM && motorState == MOVING_DOWN)
+    stopMotor();
+
+  // Display refresh
   if (now - lastDisplayUpdate >= DISPLAY_REFRESH_INTERVAL) {
     updateDisplay(currentDistance, motorState);
     lastDisplayUpdate = now;
   }
 
-  // Dual-button EEPROM reset
-  bool upPressed = !digitalRead(BTN_UP_PIN);
-  bool downPressed = !digitalRead(BTN_DOWN_PIN);
+  // ---------------- MEMORY BUTTON LOGIC ----------------
+  bool memPressed = !digitalRead(BTN_MEMORY_PIN);
 
-  if (upPressed && downPressed) {
-    if (!dualButtonActive) {
-      dualButtonActive = true;
-      dualButtonStartTime = now;
-      stopAndSaveState(false);
-    } else if (now - dualButtonStartTime > RESET_HOLD_TIME) {
-      currentDistance = readUltrasonicMedian();
-      saveDistanceToEEPROM(currentDistance);
-      Serial.println(F("[System] EEPROM Calibrated."));
-      dualButtonActive = false;
-      delay(400);
-    }
-    return;
-  } else {
-    dualButtonActive = false;
+  if (memPressed && memButtonDownTime == 0) {
+    memButtonDownTime = now;
+    memButtonWasHeld = false;
   }
 
-  // Interrupt-driven buttons
+  if (!memPressed && memButtonDownTime != 0) {
+    unsigned long pressDuration = now - memButtonDownTime;
+
+    if (!memButtonWasHeld) {
+      // Short press → cycle
+      selectedSlot++;
+      if (selectedSlot > 2) selectedSlot = -1;
+
+      Serial.print("Selected slot: ");
+      Serial.println(selectedSlot);
+    }
+
+    memButtonDownTime = 0;
+  }
+
+  if (memPressed && now - memButtonDownTime >= MEMORY_LONG_PRESS && !memButtonWasHeld) {
+    memButtonWasHeld = true;
+
+    if (selectedSlot == -1) {
+      showError("Select M1-M3");
+    } else {
+      if (isnan(memSlots[selectedSlot])) {
+        memSlots[selectedSlot] = currentDistance;
+        saveFloatToEEPROM(EEPROM_M1_ADDR + selectedSlot * 10, memSlots[selectedSlot]);
+        showError("Saved");
+      } else {
+        memSlots[selectedSlot] = NAN;
+        saveFloatToEEPROM(EEPROM_M1_ADDR + selectedSlot * 10, memSlots[selectedSlot]);
+        showError("Erased");
+      }
+    }
+  }
+
+  // ---------------- AUTO-DETECT MEMORY ----------------
+  bool nearMemory = false;
+
+  for (int i = 0; i < 3; i++) {
+    if (!isnan(memSlots[i])) {
+      if (abs(currentDistance - memSlots[i]) <= MEMORY_TOLERANCE_CM) {
+        nearMemory = true;
+        if (motorState != STOPPED) stopMotor();
+      }
+    }
+  }
+
+  digitalWrite(LED_YELLOW_PIN, nearMemory ? HIGH : LOW);
+
+  // ---------------- BUTTON INTERRUPTS ----------------
   if (upPressedISR) {
     upPressedISR = false;
     if (motorState == STOPPED && currentDistance < MAX_DISTANCE_CM)
       beginMotorMove(MOVING_UP);
     else
-      stopAndSaveState(true);
+      stopMotor();
   }
 
   if (downPressedISR) {
@@ -287,20 +316,13 @@ void loop() {
     if (motorState == STOPPED && currentDistance > MIN_DISTANCE_CM)
       beginMotorMove(MOVING_DOWN);
     else
-      stopAndSaveState(true);
+      stopMotor();
   }
 
-  // Motor delayed start
+  // Non-blocking motor start
   applyMotorStartIfReady();
 
-  // Limit protection
-  if (motorState == MOVING_UP && currentDistance >= MAX_DISTANCE_CM)
-    stopAndSaveState(true);
-
-  if (motorState == MOVING_DOWN && currentDistance <= MIN_DISTANCE_CM)
-    stopAndSaveState(true);
-
-  // LED blinking when moving
+  // LED blinking while moving
   if (motorState != STOPPED) {
     if (now - lastBlinkTime >= LED_BLINK_INTERVAL) {
       greenLedState = !greenLedState;
