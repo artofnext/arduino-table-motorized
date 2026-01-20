@@ -1,75 +1,178 @@
+
 # Motorized Table Deck Controller
 
-A smart Arduino-based controller for a motorized table deck featuring height monitoring via ultrasonic sensing, safety limits, and non-volatile memory storage.
+A smart, Arduino-powered controller for a motorized sit/stand desktop with ultrasonic height sensing, memory presets, hardware-interrupt controls, and a clean OLED UI.
 
-## 🚀 Overview
+## Overview
 
-This project provides a robust control system for a table that moves up and down. It uses an ultrasonic sensor to monitor height in real-time, ensuring the table stays within safe physical limits. The controller features a toggle-based movement logic, allowing for easy operation with simple button presses.
+This project provides a high-performance control system for a vertically actuated table deck.
 
-## ✨ Key Features
+Features include:
 
-- **Toggle Mode Operation**: Press a button once to start moving, and press any button again to stop.
-- **Precision Height Sensing**: Uses the HC-SR04 ultrasonic sensor with a median filter to eliminate noise and erratic readings.
-- **Safety Limits**: 
-    - **Minimum Height**: 67.0 cm
-    - **Maximum Height**: 111.0 cm
-    - Automatic stop when limits are reached or if sensor readings become untrusted.
-- **Persistent Storage**: Current height is saved to EEPROM upon stopping, preventing data loss during power cycles.
-- **Safety Start Delay**: 2-second safety delay on power-up with LED status indication.
-- **EEPROM Reset**: Long-press (3s) both UP and DOWN buttons to reset the stored height to the current measurement.
-- **Visual Feedback**: 
-    - **Green LED**: Blinks during movement.
-    - **Red LED**: Signals safety locks or limit reaches.
-    - **Yellow LED**: Dedicated memory indicator.
+- Precise ultrasonic height measurements  
+- Fully non-blocking motor control  
+- Hardware I2C OLED display  
+- Three programmable memory positions  
+- Auto-detection of saved memory heights  
+- Interrupt-driven UP/DOWN buttons  
+- Safety limits and error messages  
 
-## 🛠 Hardware Requirements
+---
+
+## Key Features
+
+### Advanced Motion Control
+- Instant reaction time using interrupt-driven buttons
+- Non-blocking motor start protection delay
+- Automatic stopping at min/max boundaries
+- Stable, filtered height measurements
+
+### Height Sensing
+- HC-SR04 ultrasonic sensor
+- Median filtering when stationary
+- Fast single-shot reading when moving
+- Sensor error detection with OLED warnings
+
+### Safety
+- Min height: 67.0 cm  
+- Max height: 111.0 cm  
+- Stops automatically at boundaries  
+- OLED error messages:
+  - Sensor error
+  - Out-of-range
+  - Future motor stall detection capability
+
+### Memory System (3 Slots)
+- Memory slots M1, M2, M3
+- Saved in EEPROM
+- Selectable via MEMORY button
+- Save/erase via long press
+- Adjustable tolerance (default: ±1.0 cm)
+- Auto-detect ANY saved memory height:
+  - Stops automatically
+  - Turns on yellow LED
+
+### Memory Button Behavior
+- Short press cycles:
+
+OFF -> M1 -> M2 -> M3 -> OFF ...
+
+- Long press (>= 2 seconds):
+- If empty: saves current height
+- If filled: erases slot
+- OLED displays "Saved" or "Erased"
+
+### Visual Indicators
+| LED | Meaning |
+|-----|---------|
+| Green | Blinks during movement |
+| Yellow | Near a saved memory height |
+| Red | Reserved for future safety |
+
+### OLED Display
+Shows:
+- Current height
+- Movement status (UP / DN / STOP)
+- Selected memory slot
+- Heartbeat activity
+- Error messages when needed
+
+---
+
+## Hardware Requirements
 
 ### Components
-- **Microcontroller**: Arduino (e.g., Uno, Nano)
-- **Sensor**: HC-SR04 Ultrasonic Sensor
-- **Motor Control**: 2x Relay Module (configured for polarity switching)
-- **Power Supply**: 12V 2A AC-DC Converter
-- **Step-Down Converter**: DC-DC Converter (12V to 5V) to power the Arduino and logic
-- **Buttons**: 3x Push Buttons (UP, DOWN, MEMORY)
-- **Status LEDs**: Red, Green, Yellow
+- Arduino Uno or Nano  
+- HC-SR04 ultrasonic sensor  
+- L298N or similar H-bridge motor driver  
+- OLED SSD1306 128x32 (I2C)  
+- Buttons: UP, DOWN, MEMORY  
+- LEDs: Red, Green, Yellow  
+- 12V power supply for motor  
+- 5V regulator for logic  
+- Wiring suitable for motor load  
 
-### Pin Mapping
+---
 
-| Component | Pin | Note |
-| :--- | :--- | :--- |
-| **HC-SR04 TRIG** | 3 | Trigger pulse |
-| **HC-SR04 ECHO** | 2 | Echo return |
-| **Relay A (Up)** | 4 | Forward Direction |
-| **Relay B (Down)** | 6 | Reverse Direction |
-| **UP Button** | 11 | Active LOW (Internal Pullup) |
-| **DOWN Button** | 12 | Active LOW (Internal Pullup) |
-| **MEMORY Button**| 10 | Reserved |
-| **RED LED** | 9 | Security/Error indicator |
-| **GREEN LED** | 8 | Movement indicator |
-| **YELLOW LED** | 7 | Memory indicator |
+## Pin Mapping
 
-## 🔌 Setup & Installation
+| Component | Pin | Description |
+|----------|-----|-------------|
+| HC-SR04 TRIG | 3 | Trigger |
+| HC-SR04 ECHO | 2 | Echo |
+| Motor Dir A | 4 | Forward |
+| Motor Dir B | 6 | Reverse |
+| UP Button | 11 | Interrupt pin |
+| DOWN Button | 12 | Interrupt pin |
+| MEMORY Button | 10 | Active LOW |
+| RED LED | 9 | Reserved |
+| GREEN LED | 8 | Motor activity |
+| YELLOW LED | 7 | Memory indicator |
+| OLED SDA | A4 | I2C Data |
+| OLED SCL | A5 | I2C Clock |
 
-1.  **Wiring**: Connect the components according to the Pin Mapping table.
-    - *Note*: Ensure the dual relay module is wired to allow polarity reversal for the motor.
-    - *Power*: Connect the 12V 2A supply to the relay common terminals for the motor, and use the DC-DC converter to provide stable 5V to the Arduino and sensors.
-2.  **Arduino IDE**:
-    - Install the Arduino IDE.
-    - Ensure the standard `EEPROM.h` library is available (included by default).
-3.  **Upload**:
-    - Open `table_motorized_01.ino`.
-    - Select your board and port.
-    - Click **Upload**.
+---
 
-## 📖 Usage Instructions
+## Setup & Installation
 
-- **Move Up/Down**: Press the UP or DOWN button once to begin movement.
-- **Stop**: Press **Up** or **Down**  button while the motor is running to stop the table immediately.
-- **Limits**: The motor will automatically stop if the table reaches 111 cm (MAX) or 67 cm (MIN).
-- **Reset Memory**: If you need to re-calibrate the stored distance, hold both **UP** and **DOWN** buttons for 3 seconds. The LEDs will blink to confirm the reset to the current height.
+1. Wire components according to the pin table.  
+2. Ensure the motor driver is wired for polarity reversal.  
+3. Supply 12V for motor, and regulated 5V for Arduino and logic.  
+4. Install Arduino libraries:
+ - U8g2  
+ - EEPROM (built-in)
+5. Open and upload the firmware `.ino` file.
 
-## ⚠️ Safety Precautions
+---
 
-- **Load Capacity**: Ensure your motor and relays are rated for the weight of your table deck.
-- **Sensor Obstruction**: Keep the path of the ultrasonic sensor clear for accurate height measurements.
-- **Safety Lock**: If the controller detects a sudden jump in sensor readings (e.g., > 2cm tolerance), it will trigger a safety lock and refuse to move until the reading stabilizes.
+## Usage
+
+### Moving the Table
+- Press UP or DOWN to start movement.
+- Press again to stop.
+- Movement stops automatically at limits.
+
+### Memory System
+
+#### Short Press (cycle)
+
+OFF -> M1 -> M2 -> M3 -> OFF ...
+#### Long Press (>= 2 seconds)
+- If slot empty -> saves height  
+- If slot filled -> erases slot  
+- OLED shows confirmation message
+
+#### Auto-Detection
+If current height matches any saved memory (within tolerance):
+- Motor stops
+- Yellow LED turns ON
+
+### EEPROM Reset
+Hold **UP + DOWN** for 3 seconds to recalibrate stored height.
+
+---
+
+## Safety
+
+- Ensure motor/load rating is sufficient.
+- Ultrasonic sensor must have a clear view.
+- Avoid exceeding table's mechanical range.
+- Provide proper fusing and wire gauge for motor current.
+
+---
+
+## Changelog (Latest Firmware)
+
+- Hardware I2C OLED (fast)
+- Interrupt UP/DOWN buttons
+- 3 slot memory system with save/erase
+- Auto-detect memory heights
+- Adjustable memory tolerance
+- Non-blocking architecture
+- Fast ultrasonic when moving
+- Median ultrasonic when idle
+- OLED error reporting
+- EEPROM write minimization
+- Complete project refactor
+
+
