@@ -7,7 +7,7 @@
 const int TRIG_PIN = 3;
 const int ECHO_PIN = 2;
 
-const int MOTOR_DIR_A_PIN = 4;
+const int MOTOR_DIR_A_PIN = 5;
 const int MOTOR_DIR_B_PIN = 6;
 
 const int BTN_UP_PIN = 11;
@@ -93,10 +93,14 @@ ISR(PCINT0_vect) {
   if (now - lastInterrupt < 30)
     return;
 
-  if (!digitalRead(BTN_UP_PIN))
+  if (!digitalRead(BTN_UP_PIN)) {
     upPressedISR = true;
-  if (!digitalRead(BTN_DOWN_PIN))
+    Serial.println("[ISR] UP button interrupt");
+  }
+  if (!digitalRead(BTN_DOWN_PIN)) {
     downPressedISR = true;
+    Serial.println("[ISR] DOWN button interrupt");
+  }
 
   lastInterrupt = now;
 }
@@ -127,13 +131,18 @@ float readUltrasonicFast() {
 
     if (duration > 0) {
       lastTrigger = millis();
-      return duration * 0.0343 / 2.0;
+      float distance = duration * 0.0343 / 2.0;
+      Serial.print("[Sensor] Distance: ");
+      Serial.print(distance);
+      Serial.println(" cm");
+      return distance;
     }
 
     if (retry < 2)
       delay(10); // Short gap between internal retries
   }
 
+  Serial.println("[Sensor] ERROR: All 3 retries failed");
   return NAN; // True error only if 3 pulses fail
 }
 
@@ -171,6 +180,9 @@ void beginMotorMove(MotorState s) {
   requestedMotorState = s;
   motorStartRequestTime = millis();
   pendingMotorStart = true;
+  Serial.print("[Motor] Requested: ");
+  Serial.println(s == MOVING_UP ? "MOVING_UP" : "MOVING_DOWN");
+  Serial.println("[Motor] Waiting 500ms before start...");
 }
 
 void applyMotorStartIfReady() {
@@ -182,9 +194,11 @@ void applyMotorStartIfReady() {
   if (requestedMotorState == MOVING_UP) {
     digitalWrite(MOTOR_DIR_A_PIN, HIGH);
     digitalWrite(MOTOR_DIR_B_PIN, LOW);
+    Serial.println("[Motor] STARTED - Direction: UP");
   } else if (requestedMotorState == MOVING_DOWN) {
     digitalWrite(MOTOR_DIR_A_PIN, LOW);
     digitalWrite(MOTOR_DIR_B_PIN, HIGH);
+    Serial.println("[Motor] STARTED - Direction: DOWN");
   }
 
   motorState = requestedMotorState;
@@ -192,6 +206,9 @@ void applyMotorStartIfReady() {
 }
 
 void stopMotor() {
+  if (motorState != STOPPED) {
+    Serial.println("[Motor] STOPPED");
+  }
   motorState = STOPPED;
   digitalWrite(MOTOR_DIR_A_PIN, LOW);
   digitalWrite(MOTOR_DIR_B_PIN, LOW);
@@ -202,6 +219,8 @@ void showError(const char *message) {
   strncpy(errorMessage, message, sizeof(errorMessage) - 1);
   errorMessage[sizeof(errorMessage) - 1] = '\0'; // Ensure null termination
   errorStartTime = millis();
+  Serial.print("[Display] Error shown: ");
+  Serial.println(message);
 }
 
 // Helper functions for EEPROM
@@ -217,6 +236,19 @@ void loadMemorySlots() {
   memSlots[0] = loadFloatFromEEPROM(EEPROM_M1_ADDR);
   memSlots[1] = loadFloatFromEEPROM(EEPROM_M2_ADDR);
   memSlots[2] = loadFloatFromEEPROM(EEPROM_M3_ADDR);
+
+  Serial.println("[Memory] Loaded from EEPROM:");
+  for (int i = 0; i < 3; i++) {
+    Serial.print("  M");
+    Serial.print(i + 1);
+    Serial.print(": ");
+    if (isnan(memSlots[i])) {
+      Serial.println("EMPTY");
+    } else {
+      Serial.print(memSlots[i]);
+      Serial.println(" cm");
+    }
+  }
 
   // If EEPROM is fresh (0xFF), values might be NAN or garbage.
   // Ideally check for valid range or separate flag, but NAN check usually works
@@ -317,9 +349,11 @@ void setup() {
     u8g2.drawStr(0, 16, "Initializing...");
   } while (u8g2.nextPage());
 
+  Serial.println("[System] Loading memory slots...");
   loadMemorySlots();
 
   // LED Initialization Sequence
+  Serial.println("[System] LED initialization sequence started");
   digitalWrite(LED_RED_PIN, HIGH);
   digitalWrite(LED_GREEN_PIN, HIGH);
   digitalWrite(LED_YELLOW_PIN, HIGH);
@@ -327,6 +361,7 @@ void setup() {
   digitalWrite(LED_RED_PIN, LOW);
   digitalWrite(LED_GREEN_PIN, LOW);
   digitalWrite(LED_YELLOW_PIN, LOW);
+  Serial.println("[System] LED initialization complete");
 
   Serial.println("[System] Ready");
 }
@@ -340,6 +375,7 @@ void loop() {
       (motorState == STOPPED) ? readUltrasonicMedian() : readUltrasonicFast();
 
   if (isnan(distRaw)) {
+    Serial.println("[Sensor] WARNING: Invalid reading (NAN)");
     showError("Sensor Error");
     // Removed early return to allow updateDisplay to run
   } else {
@@ -347,11 +383,19 @@ void loop() {
   }
 
   // Auto-STOP for limits
-  if (currentDistance >= MAX_DISTANCE_CM && motorState == MOVING_UP)
+  if (currentDistance >= MAX_DISTANCE_CM && motorState == MOVING_UP) {
+    Serial.print("[Limit] MAX reached (");
+    Serial.print(MAX_DISTANCE_CM);
+    Serial.println(" cm) - stopping motor");
     stopMotor();
+  }
 
-  if (currentDistance <= MIN_DISTANCE_CM && motorState == MOVING_DOWN)
+  if (currentDistance <= MIN_DISTANCE_CM && motorState == MOVING_DOWN) {
+    Serial.print("[Limit] MIN reached (");
+    Serial.print(MIN_DISTANCE_CM);
+    Serial.println(" cm) - stopping motor");
     stopMotor();
+  }
 
   // Display refresh
   if (now - lastDisplayUpdate >= DISPLAY_REFRESH_INTERVAL) {
@@ -363,6 +407,7 @@ void loop() {
   bool memPressed = !digitalRead(BTN_MEMORY_PIN);
 
   if (memPressed && memButtonDownTime == 0) {
+    Serial.println("[Button] MEMORY button pressed");
     memButtonDownTime = now;
     memButtonWasHeld = false;
   }
@@ -376,8 +421,13 @@ void loop() {
       if (selectedSlot > 2)
         selectedSlot = -1;
 
-      Serial.print("Selected slot: ");
-      Serial.println(selectedSlot);
+      Serial.print("[Memory] Slot cycled to: ");
+      if (selectedSlot == -1) {
+        Serial.println("OFF");
+      } else {
+        Serial.print("M");
+        Serial.println(selectedSlot + 1);
+      }
     }
 
     memButtonDownTime = 0;
@@ -386,19 +436,28 @@ void loop() {
   if (memPressed && now - memButtonDownTime >= MEMORY_LONG_PRESS &&
       !memButtonWasHeld) {
     memButtonWasHeld = true;
+    Serial.println("[Button] MEMORY long press detected");
 
     if (selectedSlot == -1) {
+      Serial.println("[Memory] ERROR: No slot selected");
       showError("Select M1-M3");
     } else {
       if (isnan(memSlots[selectedSlot])) {
         memSlots[selectedSlot] = currentDistance;
         saveFloatToEEPROM(EEPROM_M1_ADDR + selectedSlot * 10,
                           memSlots[selectedSlot]);
+        Serial.print("[Memory] SAVED M");
+        Serial.print(selectedSlot + 1);
+        Serial.print(" = ");
+        Serial.print(currentDistance);
+        Serial.println(" cm");
         showError("Saved");
       } else {
         memSlots[selectedSlot] = NAN;
         saveFloatToEEPROM(EEPROM_M1_ADDR + selectedSlot * 10,
                           memSlots[selectedSlot]);
+        Serial.print("[Memory] ERASED M");
+        Serial.println(selectedSlot + 1);
         showError("Erased");
       }
     }
@@ -406,42 +465,77 @@ void loop() {
 
   // ---------------- AUTO-DETECT MEMORY ----------------
   bool nearAnyMemory = false;
+  static bool wasNearMemory = false;
 
   for (int i = 0; i < 3; i++) {
     if (!isnan(memSlots[i])) {
       if (abs(currentDistance - memSlots[i]) <= MEMORY_TOLERANCE_CM) {
         nearAnyMemory = true;
+        if (!wasNearMemory) {
+          Serial.print("[Memory] Near M");
+          Serial.print(i + 1);
+          Serial.print(" position (");
+          Serial.print(memSlots[i]);
+          Serial.println(" cm)");
+        }
       }
     }
   }
 
   if (nearAnyMemory) {
     if (motorState != STOPPED && !ignoreMemoryStop) {
+      Serial.println("[Memory] Auto-stop at memory position");
       stopMotor();
     }
   } else {
+    if (wasNearMemory) {
+      Serial.println("[Memory] Left memory zone");
+    }
     ignoreMemoryStop = false; // Re-arm detection once we leave the zone
   }
 
+  wasNearMemory = nearAnyMemory;
+
+  static bool lastYellowState = false;
+  bool newYellowState = nearAnyMemory;
+  if (newYellowState != lastYellowState) {
+    Serial.print("[LED] YELLOW: ");
+    Serial.println(newYellowState ? "ON" : "OFF");
+    lastYellowState = newYellowState;
+  }
   digitalWrite(LED_YELLOW_PIN, nearAnyMemory ? HIGH : LOW);
 
   // ---------------- BUTTON INTERRUPTS ----------------
   if (upPressedISR) {
     upPressedISR = false;
+    Serial.println("[Button] UP button action");
     if (motorState == STOPPED && currentDistance < MAX_DISTANCE_CM) {
+      Serial.println("[Button] UP - Starting motor");
       ignoreMemoryStop = true; // Allow moving away from current spot
       beginMotorMove(MOVING_UP);
     } else {
+      if (motorState != STOPPED) {
+        Serial.println("[Button] UP - Stopping motor (toggle)");
+      } else {
+        Serial.println("[Button] UP - Already at max limit");
+      }
       stopMotor();
     }
   }
 
   if (downPressedISR) {
     downPressedISR = false;
+    Serial.println("[Button] DOWN button action");
     if (motorState == STOPPED && currentDistance > MIN_DISTANCE_CM) {
+      Serial.println("[Button] DOWN - Starting motor");
       ignoreMemoryStop = true; // Allow moving away from current spot
       beginMotorMove(MOVING_DOWN);
     } else {
+      if (motorState != STOPPED) {
+        Serial.println("[Button] DOWN - Stopping motor (toggle)");
+      } else {
+        Serial.println("[Button] DOWN - Already at min limit");
+      }
       stopMotor();
     }
   }
